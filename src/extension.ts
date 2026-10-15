@@ -70,7 +70,12 @@ function cleanPrompt(raw: string): string {
     .trim();
 }
 
-function buildOptimizedPrompt(raw: string, taskType: TaskType, modelId: string): string {
+function buildOptimizedPrompt(
+  raw: string,
+  taskType: TaskType,
+  modelId: string,
+  targetModel?: ModelPreset
+): string {
   const cleaned = cleanPrompt(raw);
   const base = cleaned
     .replace(/^\s*[-*]\s*/gm, '')
@@ -79,6 +84,7 @@ function buildOptimizedPrompt(raw: string, taskType: TaskType, modelId: string):
     .trim();
 
   const preset = MODEL_PRESETS[taskType].find((candidate) => candidate.id === modelId) ?? MODEL_PRESETS[taskType][0];
+  const selectedModel = targetModel ?? preset;
 
   let optimized = base;
 
@@ -92,7 +98,7 @@ function buildOptimizedPrompt(raw: string, taskType: TaskType, modelId: string):
     optimized = `Task: ${base}\n\nRequirements: be explicit about context, constraints, desired output, and success criteria. Keep the answer compact and directly actionable.`;
   }
 
-  return `Exact model selected: ${preset.label}\nRecommended default model for this task: ${MODEL_PRESETS[taskType][0].label}\n\nModel-specific instruction: ${preset.instruction}\n\nOptimized prompt:\n${optimized}\n\nStrategy: removed filler, clarified the task, tightened constraints, and improved signal-to-noise ratio so the model can execute correctly on the first pass.`;
+  return `Exact model selected: ${selectedModel.label}\nRecommended default model for this task: ${MODEL_PRESETS[taskType][0].label}\n\nModel-specific instruction: ${selectedModel.instruction}\n\nOptimized prompt:\n${optimized}\n\nStrategy: removed filler, clarified the task, tightened constraints, and improved signal-to-noise ratio so the model can execute correctly on the first pass.`;
 }
 
 function getPresetData(): Record<string, Array<{ id: string; label: string; instruction: string }>> {
@@ -478,6 +484,61 @@ async function optimizeForExactModel(): Promise<void> {
   openPromptGuruPanel(input, taskSelection.value as TaskType, modelSelection.value);
 }
 
+async function handlePromptGuruChat(
+  request: vscode.ChatRequest,
+  context: vscode.ChatContext,
+  response: vscode.ChatResponseStream,
+  token: vscode.CancellationToken
+): Promise<void> {
+  const prompt = request.prompt.trim();
+  if (!prompt) {
+    response.markdown('Enter a request after `@prompt-guru` and I will optimize it before sending it to the selected chat model.');
+    return;
+  }
+
+  const taskType = detectTaskType(prompt);
+  const selectedModel = request.model;
+  const modelLabel = `${selectedModel.name} (${selectedModel.vendor}/${selectedModel.family})`;
+  const optimizedPrompt = buildOptimizedPrompt(prompt, taskType, getTaskDefaults(taskType), {
+    id: selectedModel.id,
+    label: modelLabel,
+    instruction: `Optimize this request specifically for the selected ${selectedModel.name} model. Preserve the user's intent, avoid adding unsupported capabilities, and make the task and expected result explicit.`
+  });
+
+  const history = context.history.flatMap((turn) => {
+    if (turn instanceof vscode.ChatRequestTurn) {
+      return [vscode.LanguageModelChatMessage.User(turn.prompt)];
+    }
+
+    if (turn instanceof vscode.ChatResponseTurn) {
+      const text = turn.response
+        .filter((part): part is vscode.ChatResponseMarkdownPart => part instanceof vscode.ChatResponseMarkdownPart)
+        .map((part) => part.value.value)
+        .join('\n');
+      return text ? [vscode.LanguageModelChatMessage.Assistant(text)] : [];
+    }
+
+    return [];
+  });
+
+  response.markdown(`**Optimized prompt sent to ${modelLabel}:**\n\n${optimizedPrompt}\n\n---\n\n**Response:**\n\n`);
+
+  try {
+    const modelResponse = await selectedModel.sendRequest(
+      [...history, vscode.LanguageModelChatMessage.User(optimizedPrompt)],
+      {},
+      token
+    );
+
+    for await (const chunk of modelResponse.text) {
+      response.markdown(chunk);
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    response.markdown(`\n\nPrompt Guru prepared the prompt, but the selected model could not complete the request: ${detail}`);
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
 
@@ -485,8 +546,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const optimizeSelectionCommand = vscode.commands.registerCommand('promptGuru.optimizeSelection', optimizeSelection);
   const optimizeInputCommand = vscode.commands.registerCommand('promptGuru.optimizeInput', optimizePromptFromInput);
   const optimizeForModelCommand = vscode.commands.registerCommand('promptGuru.optimizeForModel', optimizeForExactModel);
+  const chatParticipant = vscode.chat.createChatParticipant('prompt-guru.chat', handlePromptGuruChat);
 
-  context.subscriptions.push(openPanelCommand, optimizeSelectionCommand, optimizeInputCommand, optimizeForModelCommand);
+  context.subscriptions.push(openPanelCommand, optimizeSelectionCommand, optimizeInputCommand, optimizeForModelCommand, chatParticipant);
 }
 
 export function deactivate(): void {

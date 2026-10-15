@@ -13,6 +13,7 @@ This project is a modified and extended version of the original Prompt Master co
 - applies model presets per task type
 - recommends a task category and provides task-specific model presets
 - supports exact-model prompt formatting for GPT, Claude, Gemini, Copilot, Midjourney, and Stable Diffusion
+- adds an `@prompt-guru` Copilot Chat participant that optimizes requests and sends them to the model selected in that chat turn
 - opens as a dedicated VS Code panel
 - includes a copy-to-clipboard action for fast reuse
 - packages neatly into a VSIX for installation across workspaces
@@ -44,7 +45,13 @@ The extension ships with preset groups for:
 
 Inside the panel, the generated output can be copied directly to the clipboard with one click.
 
-### 4. VSIX packaging
+### 4. Copilot Chat routing
+
+In VS Code Chat, address a request to `@prompt-guru`. The extension detects the task, builds an optimized prompt for the model currently selected in that chat, sends it through VS Code's Language Model API, and streams the model's answer back. The optimized prompt is shown in the chat response so you can see what was sent. The first model request may ask you to grant the extension permission.
+
+This participant must be invoked with `@prompt-guru`; VS Code does not let extensions intercept ordinary, unprefixed messages or messages sent to other chat participants. The panel's Midjourney and Stable Diffusion presets only prepare text and do not submit to those external services.
+
+### 5. VSIX packaging
 
 The extension includes a packaging script to generate a `.vsix` file for installation in any VS Code environment.
 
@@ -113,7 +120,13 @@ This opens the primary Prompt Guru panel.
 4. Paste the rough prompt.
 5. The extension generates a model-specific prompt with guidance. Copy it into the selected AI tool to run it there.
 
-Prompt Guru does not currently connect to AI provider APIs or automatically submit prompts to the selected model. Model presets shape the generated prompt; the actual model selection and execution happen in the target AI tool.
+### Send an optimized request directly from chat
+
+1. Open VS Code Chat and select the model you want to use.
+2. Enter `@prompt-guru` followed by your request, for example: `@prompt-guru explain this function and suggest a safer implementation`.
+3. Prompt Guru displays the optimized prompt it sent, then streams the selected model's answer in the chat.
+
+This integration uses the model selected in Copilot Chat for that turn. It does not silently reroute an ordinary chat message or control chat extensions other than its own `@prompt-guru` participant.
 
 ---
 

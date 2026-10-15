@@ -43,6 +43,14 @@
         "title": "Prompt Guru: Optimize for Exact AI Model"
       }
     ],
+    "chatParticipants": [
+      {
+        "id": "prompt-guru.chat",
+        "name": "prompt-guru",
+        "fullName": "Prompt Guru",
+        "description": "Optimize your request, then send it to the model selected in chat."
+      }
+    ],
     "menus": {
       "editor/context": [
         {

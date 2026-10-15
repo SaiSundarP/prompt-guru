@@ -90,7 +90,7 @@ function cleanPrompt(raw) {
         .replace(/\s+/g, ' ')
         .trim();
 }
-function buildOptimizedPrompt(raw, taskType, modelId) {
+function buildOptimizedPrompt(raw, taskType, modelId, targetModel) {
     const cleaned = cleanPrompt(raw);
     const base = cleaned
         .replace(/^\s*[-*]\s*/gm, '')
@@ -98,6 +98,7 @@ function buildOptimizedPrompt(raw, taskType, modelId) {
         .replace(/\s+/g, ' ')
         .trim();
     const preset = MODEL_PRESETS[taskType].find((candidate) => candidate.id === modelId) ?? MODEL_PRESETS[taskType][0];
+    const selectedModel = targetModel ?? preset;
     let optimized = base;
     if (taskType === 'coding') {
         optimized = `Objective: ${base}\n\nConstraints: keep scope narrow, preserve the current contract, name the exact file or module involved, define success criteria, and avoid unrelated work.\n\nDone When: the task is precise enough to implement without guessing.`;
@@ -111,7 +112,7 @@ function buildOptimizedPrompt(raw, taskType, modelId) {
     else {
         optimized = `Task: ${base}\n\nRequirements: be explicit about context, constraints, desired output, and success criteria. Keep the answer compact and directly actionable.`;
     }
-    return `Exact model selected: ${preset.label}\nRecommended default model for this task: ${MODEL_PRESETS[taskType][0].label}\n\nModel-specific instruction: ${preset.instruction}\n\nOptimized prompt:\n${optimized}\n\nStrategy: removed filler, clarified the task, tightened constraints, and improved signal-to-noise ratio so the model can execute correctly on the first pass.`;
+    return `Exact model selected: ${selectedModel.label}\nRecommended default model for this task: ${MODEL_PRESETS[taskType][0].label}\n\nModel-specific instruction: ${selectedModel.instruction}\n\nOptimized prompt:\n${optimized}\n\nStrategy: removed filler, clarified the task, tightened constraints, and improved signal-to-noise ratio so the model can execute correctly on the first pass.`;
 }
 function getPresetData() {
     return {
@@ -456,13 +457,53 @@ async function optimizeForExactModel() {
     }
     openPromptGuruPanel(input, taskSelection.value, modelSelection.value);
 }
+async function handlePromptGuruChat(request, context, response, token) {
+    const prompt = request.prompt.trim();
+    if (!prompt) {
+        response.markdown('Enter a request after `@prompt-guru` and I will optimize it before sending it to the selected chat model.');
+        return;
+    }
+    const taskType = detectTaskType(prompt);
+    const selectedModel = request.model;
+    const modelLabel = `${selectedModel.name} (${selectedModel.vendor}/${selectedModel.family})`;
+    const optimizedPrompt = buildOptimizedPrompt(prompt, taskType, getTaskDefaults(taskType), {
+        id: selectedModel.id,
+        label: modelLabel,
+        instruction: `Optimize this request specifically for the selected ${selectedModel.name} model. Preserve the user's intent, avoid adding unsupported capabilities, and make the task and expected result explicit.`
+    });
+    const history = context.history.flatMap((turn) => {
+        if (turn instanceof vscode.ChatRequestTurn) {
+            return [vscode.LanguageModelChatMessage.User(turn.prompt)];
+        }
+        if (turn instanceof vscode.ChatResponseTurn) {
+            const text = turn.response
+                .filter((part) => part instanceof vscode.ChatResponseMarkdownPart)
+                .map((part) => part.value.value)
+                .join('\n');
+            return text ? [vscode.LanguageModelChatMessage.Assistant(text)] : [];
+        }
+        return [];
+    });
+    response.markdown(`**Optimized prompt sent to ${modelLabel}:**\n\n${optimizedPrompt}\n\n---\n\n**Response:**\n\n`);
+    try {
+        const modelResponse = await selectedModel.sendRequest([...history, vscode.LanguageModelChatMessage.User(optimizedPrompt)], {}, token);
+        for await (const chunk of modelResponse.text) {
+            response.markdown(chunk);
+        }
+    }
+    catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        response.markdown(`\n\nPrompt Guru prepared the prompt, but the selected model could not complete the request: ${detail}`);
+    }
+}
 function activate(context) {
     extensionContext = context;
     const openPanelCommand = vscode.commands.registerCommand('promptGuru.openPanel', () => openPromptGuruPanel());
     const optimizeSelectionCommand = vscode.commands.registerCommand('promptGuru.optimizeSelection', optimizeSelection);
     const optimizeInputCommand = vscode.commands.registerCommand('promptGuru.optimizeInput', optimizePromptFromInput);
     const optimizeForModelCommand = vscode.commands.registerCommand('promptGuru.optimizeForModel', optimizeForExactModel);
-    context.subscriptions.push(openPanelCommand, optimizeSelectionCommand, optimizeInputCommand, optimizeForModelCommand);
+    const chatParticipant = vscode.chat.createChatParticipant('prompt-guru.chat', handlePromptGuruChat);
+    context.subscriptions.push(openPanelCommand, optimizeSelectionCommand, optimizeInputCommand, optimizeForModelCommand, chatParticipant);
 }
 function deactivate() {
     extensionContext = undefined;

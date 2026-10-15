@@ -27,6 +27,10 @@
   "contributes": {
     "commands": [
       {
+        "command": "promptGuru.openPanel",
+        "title": "Prompt Guru: Open Panel"
+      },
+      {
         "command": "promptGuru.optimizeSelection",
         "title": "Prompt Guru: Optimize Selected Prompt"
       },
@@ -49,6 +53,9 @@
       ],
       "commandPalette": [
         {
+          "command": "promptGuru.openPanel"
+        },
+        {
           "command": "promptGuru.optimizeSelection"
         },
         {
@@ -63,11 +70,13 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package:vsix": "npx @vscode/vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.14.12",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.1",
     "typescript": "^5.5.4"
   }
 }

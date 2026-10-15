@@ -1,4 +1,14 @@
+.git/**
+.github/**
+.vscode/**
+node_modules/**
 src/**
+references/**
+workspace-template/**
+SKILL.md
+tsconfig.json
+*.vsix
+*.mapsrc/**
 .vscode/**
 .gitignore
 .npmrc

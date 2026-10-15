@@ -1,0 +1,6 @@
+src/**
+.vscode/**
+.gitignore
+.npmrc
+**/*.map
+**/*.ts

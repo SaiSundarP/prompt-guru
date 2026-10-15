@@ -1,0 +1,73 @@
+{
+  "name": "prompt-guru",
+  "displayName": "Prompt Guru",
+  "description": "Generate exact-model prompts, optimize weak prompts, reduce token waste, and route work to the right AI model.",
+  "version": "0.1.0",
+  "publisher": "sai-sundar-p",
+  "author": "Sai Sundar P",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "keywords": [
+    "prompt",
+    "copilot",
+    "openai",
+    "claude",
+    "gemini",
+    "midjourney",
+    "ai",
+    "routing"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "promptGuru.optimizeSelection",
+        "title": "Prompt Guru: Optimize Selected Prompt"
+      },
+      {
+        "command": "promptGuru.optimizeInput",
+        "title": "Prompt Guru: Optimize Prompt from Input"
+      },
+      {
+        "command": "promptGuru.optimizeForModel",
+        "title": "Prompt Guru: Optimize for Exact AI Model"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "promptGuru.optimizeSelection",
+          "when": "editorHasSelection",
+          "group": "promptGuru"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "promptGuru.optimizeSelection"
+        },
+        {
+          "command": "promptGuru.optimizeInput"
+        },
+        {
+          "command": "promptGuru.optimizeForModel"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.4"
+  }
+}

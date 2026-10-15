@@ -484,6 +484,179 @@ async function optimizeForExactModel(): Promise<void> {
   openPromptGuruPanel(input, taskSelection.value as TaskType, modelSelection.value);
 }
 
+const workspaceTools: vscode.LanguageModelChatTool[] = [
+  {
+    name: 'list_workspace_files',
+    description: 'List relevant files in the open workspace before making a coding change.',
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Optional filename or path substring to filter by.' } }
+    }
+  },
+  {
+    name: 'read_workspace_file',
+    description: 'Read a UTF-8 text file from the open workspace. Read files before editing them.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
+      required: ['path']
+    }
+  },
+  {
+    name: 'edit_workspace_file',
+    description: 'Propose replacing an existing workspace file or creating a new one with UTF-8 text. Read existing files first. The user must approve each edit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative file path previously read.' },
+        content: { type: 'string', description: 'Complete updated file contents.' }
+      },
+      required: ['path', 'content']
+    }
+  }
+];
+
+function getWorkspaceTarget(relativePath: unknown): { root: vscode.WorkspaceFolder; uri: vscode.Uri; relativePath: string } | string {
+  const root = vscode.workspace.workspaceFolders?.[0];
+  if (!root) {
+    return 'No workspace folder is open.';
+  }
+
+  if (typeof relativePath !== 'string' || !relativePath.trim()) {
+    return 'A non-empty workspace-relative path is required.';
+  }
+
+  const normalized = relativePath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || segments.some((segment) => segment === '..' || segment === '')) {
+    return 'The path must stay inside the workspace and cannot contain parent-directory segments.';
+  }
+
+  return { root, uri: vscode.Uri.joinPath(root.uri, ...segments), relativePath: segments.join('/') };
+}
+
+async function runWorkspaceTool(
+  name: string,
+  input: Record<string, unknown>,
+  readSnapshots: Map<string, string | null>,
+  token: vscode.CancellationToken
+): Promise<string> {
+  if (token.isCancellationRequested) {
+    return 'Cancelled.';
+  }
+
+  if (name === 'list_workspace_files') {
+    const root = vscode.workspace.workspaceFolders?.[0];
+    if (!root) {
+      return 'No workspace folder is open.';
+    }
+
+    const files = await vscode.workspace.findFiles('**/*', '**/{node_modules,.git,dist,out,build}/**', 120, token);
+    const query = typeof input.query === 'string' ? input.query.toLowerCase() : '';
+    const relativeFiles = files
+      .filter((file) => file.path.startsWith(`${root.uri.path}/`))
+      .map((file) => file.path.slice(root.uri.path.length + 1))
+      .filter((file) => !query || file.toLowerCase().includes(query));
+    return relativeFiles.length ? relativeFiles.join('\n') : 'No matching workspace files found.';
+  }
+
+  const target = getWorkspaceTarget(input.path);
+  if (typeof target === 'string') {
+    return target;
+  }
+
+  if (name === 'read_workspace_file') {
+    try {
+      const document = await vscode.workspace.openTextDocument(target.uri);
+      const content = document.getText();
+      if (content.length > 24000) {
+        return `File is ${content.length} characters; refusing to read more than 24,000 characters in one call. Read a more specific file instead.`;
+      }
+      readSnapshots.set(target.relativePath, content);
+      return content;
+    } catch {
+      try {
+        await vscode.workspace.fs.stat(target.uri);
+        return `Could not read ${target.relativePath}. It exists but could not be opened as a text file.`;
+      } catch {
+        readSnapshots.set(target.relativePath, null);
+        return `File ${target.relativePath} does not exist yet. You may create it with edit_workspace_file after checking the workspace structure.`;
+      }
+    }
+  }
+
+  if (name === 'edit_workspace_file') {
+    if (typeof input.content !== 'string') {
+      return 'The replacement content must be a string.';
+    }
+    if (input.content.length > 500000) {
+      return 'Refusing to apply a file replacement larger than 500,000 characters.';
+    }
+
+    const originalContent = readSnapshots.get(target.relativePath);
+    if (originalContent === undefined) {
+      return 'Read or check this path with read_workspace_file before proposing an edit.';
+    }
+
+    try {
+      if (originalContent === null) {
+        try {
+          await vscode.workspace.fs.stat(target.uri);
+          return 'The file now exists. Read it again before proposing an edit.';
+        } catch {
+          const approval = await vscode.window.showWarningMessage(
+            `Prompt Guru wants to create ${target.relativePath}. Apply this model-generated change?`,
+            { modal: true },
+            'Create File'
+          );
+          if (approval !== 'Create File') {
+            return 'The user declined this file creation. Do not retry the same creation; continue without creating this file.';
+          }
+
+          const edit = new vscode.WorkspaceEdit();
+          edit.createFile(target.uri);
+          edit.insert(target.uri, new vscode.Position(0, 0), input.content);
+          const applied = await vscode.workspace.applyEdit(edit);
+          if (!applied) {
+            return `VS Code could not create ${target.relativePath}.`;
+          }
+          readSnapshots.set(target.relativePath, input.content);
+          return `Created the approved file ${target.relativePath}.`;
+        }
+      }
+
+      const document = await vscode.workspace.openTextDocument(target.uri);
+      if (document.getText() !== originalContent) {
+        return 'The file changed since it was read. Read it again before proposing an edit.';
+      }
+
+      const approval = await vscode.window.showWarningMessage(
+        `Prompt Guru wants to replace ${target.relativePath}. Apply this model-generated change?`,
+        { modal: true },
+        'Apply Edit'
+      );
+      if (approval !== 'Apply Edit') {
+        return 'The user declined this file edit. Do not try to make the same edit again; continue without modifying this file.';
+      }
+
+      const edit = new vscode.WorkspaceEdit();
+      const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length));
+      edit.replace(target.uri, fullRange, input.content);
+      const applied = await vscode.workspace.applyEdit(edit);
+      if (!applied) {
+        return `VS Code could not apply the edit to ${target.relativePath}.`;
+      }
+
+      readSnapshots.set(target.relativePath, input.content);
+      return `Applied the approved edit to ${target.relativePath}.`;
+    } catch (error) {
+      return `Could not apply the edit: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  return `Unknown workspace tool: ${name}`;
+}
+
 async function handlePromptGuruChat(
   request: vscode.ChatRequest,
   context: vscode.ChatContext,
@@ -504,6 +677,11 @@ async function handlePromptGuruChat(
     label: modelLabel,
     instruction: `Optimize this request specifically for the selected ${selectedModel.name} model. Preserve the user's intent, avoid adding unsupported capabilities, and make the task and expected result explicit.`
   });
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0];
+  const canEditWorkspace = taskType === 'coding' && Boolean(workspaceRoot);
+  const agentInstructions = canEditWorkspace
+    ? `\n\nImplementation requirements: Treat this as an agent task and implement the requested change in the open workspace (${workspaceRoot?.name}). First inspect relevant files with list_workspace_files and read_workspace_file. Use edit_workspace_file for changes; each edit requires explicit user approval. Keep changes scoped. After editing, explain exactly what changed and state plainly if you could not run tests or validation. You have no shell, terminal, or automatic test execution tool. Never claim code was changed unless an edit tool reports success.`
+    : '\n\nRespond directly to the user. This request is not classified as a workspace coding task, so do not attempt workspace edits.';
 
   const history = context.history.flatMap((turn) => {
     if (turn instanceof vscode.ChatRequestTurn) {
@@ -524,15 +702,52 @@ async function handlePromptGuruChat(
   response.markdown(`**Optimized prompt sent to ${modelLabel}:**\n\n${optimizedPrompt}\n\n---\n\n**Response:**\n\n`);
 
   try {
-    const modelResponse = await selectedModel.sendRequest(
-      [...history, vscode.LanguageModelChatMessage.User(optimizedPrompt)],
-      {},
-      token
-    );
+    const messages = [...history, vscode.LanguageModelChatMessage.User(`${optimizedPrompt}${agentInstructions}`)];
+    const readSnapshots = new Map<string, string | null>();
+    const tools = canEditWorkspace ? workspaceTools : [];
+    let toolCallCount = 0;
 
-    for await (const chunk of modelResponse.text) {
-      response.markdown(chunk);
+    for (let round = 0; round < 8; round += 1) {
+      const modelResponse = await selectedModel.sendRequest(messages, { tools }, token);
+      const assistantContent: Array<vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart | vscode.LanguageModelDataPart> = [];
+      const toolCalls: vscode.LanguageModelToolCallPart[] = [];
+
+      for await (const part of modelResponse.stream) {
+        if (part instanceof vscode.LanguageModelTextPart) {
+          assistantContent.push(part);
+          response.markdown(part.value);
+        } else if (part instanceof vscode.LanguageModelToolCallPart) {
+          assistantContent.push(part);
+          toolCalls.push(part);
+        } else if (part instanceof vscode.LanguageModelDataPart) {
+          assistantContent.push(part);
+        }
+      }
+
+      if (!toolCalls.length) {
+        return;
+      }
+
+      messages.push(new vscode.LanguageModelChatMessage(vscode.LanguageModelChatMessageRole.Assistant, assistantContent));
+      const toolResults: vscode.LanguageModelToolResultPart[] = [];
+
+      for (const toolCall of toolCalls) {
+        toolCallCount += 1;
+        if (toolCallCount > 16) {
+          response.markdown('\n\nStopped after reaching the workspace tool-call limit.');
+          return;
+        }
+
+        const toolInput = toolCall.input as Record<string, unknown>;
+        response.progress(`${toolCall.name}: ${String(toolInput.path ?? toolInput.query ?? 'workspace')}`);
+        const result = await runWorkspaceTool(toolCall.name, toolInput, readSnapshots, token);
+        toolResults.push(new vscode.LanguageModelToolResultPart(toolCall.callId, [new vscode.LanguageModelTextPart(result)]));
+      }
+
+      messages.push(new vscode.LanguageModelChatMessage(vscode.LanguageModelChatMessageRole.User, toolResults));
     }
+
+    response.markdown('\n\nStopped after reaching the model tool-round limit.');
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     response.markdown(`\n\nPrompt Guru prepared the prompt, but the selected model could not complete the request: ${detail}`);

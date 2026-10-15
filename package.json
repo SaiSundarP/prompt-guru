@@ -2,7 +2,7 @@
   "name": "prompt-guru",
   "displayName": "Prompt Guru",
   "description": "Generate exact-model prompts, optimize weak prompts, reduce token waste, and route work to the right AI model.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "sai-sundar-p",
   "author": "Sai Sundar P",
   "license": "MIT",

@@ -47,9 +47,9 @@ Inside the panel, the generated output can be copied directly to the clipboard w
 
 ### 4. Copilot Chat routing
 
-In VS Code Chat, address a request to `@prompt-guru`. The extension detects the task, builds an optimized prompt for the model currently selected in that chat, sends it through VS Code's Language Model API, and streams the model's answer back. The optimized prompt is shown in the chat response so you can see what was sent. The first model request may ask you to grant the extension permission.
+In VS Code Chat, address a request to `@prompt-guru`. The extension optimizes the request for the model selected in that chat and sends it through VS Code's Language Model API. For coding requests, it can list and read files in the first open workspace folder and propose edits or new files. VS Code asks you to approve every file change before it is applied. The optimized prompt is shown in the chat response, followed by the model's response. The first model request may ask you to grant the extension permission.
 
-This participant must be invoked with `@prompt-guru`; VS Code does not let extensions intercept ordinary, unprefixed messages or messages sent to other chat participants. The panel's Midjourney and Stable Diffusion presets only prepare text and do not submit to those external services.
+The coding agent does not have terminal access and cannot run tests or commands; it reports this rather than claiming validation. File changes are limited to the first open workspace folder and require explicit approval. This participant must be invoked with `@prompt-guru`; VS Code does not let extensions intercept ordinary, unprefixed messages or messages sent to other chat participants. The panel's Midjourney and Stable Diffusion presets only prepare text and do not submit to those external services.
 
 ### 5. VSIX packaging
 
@@ -123,8 +123,9 @@ This opens the primary Prompt Guru panel.
 ### Send an optimized request directly from chat
 
 1. Open VS Code Chat and select the model you want to use.
-2. Enter `@prompt-guru` followed by your request, for example: `@prompt-guru explain this function and suggest a safer implementation`.
-3. Prompt Guru displays the optimized prompt it sent, then streams the selected model's answer in the chat.
+2. Enter `@prompt-guru` followed by your request, for example: `@prompt-guru implement CSV export for the reports page`.
+3. For coding requests, Prompt Guru inspects workspace files and asks you to approve each proposed file change.
+4. Prompt Guru displays the optimized prompt it sent, then streams the selected model's response in the chat.
 
 This integration uses the model selected in Copilot Chat for that turn. It does not silently reroute an ordinary chat message or control chat extensions other than its own `@prompt-guru` participant.
 
